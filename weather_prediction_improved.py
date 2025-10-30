@@ -1135,10 +1135,10 @@ def main():
     for i, feature in enumerate(Config.BASIC_FEATURES):
         predicted_params[feature] = original_values[:, i]
 
-    # Fahrenheit'ten Celsius'a
+    # NOT: Veri zaten Celsius'ta (load_and_convert_data'da dönüştürüldü)
+    # Ekstra Fahrenheit->Celsius dönüşümü YAPMA!
     predicted_params['Temperature'] = [
-        round(fahrenheit_to_celsius(temp), 1)
-        for temp in predicted_params['Temperature']
+        round(temp, 1) for temp in predicted_params['Temperature']
     ]
 
     # Önceki günün min/max
