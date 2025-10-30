@@ -521,8 +521,13 @@ def analyze_historical_data(target_date):
 # ADAPTIVE LEARNING
 # =============================================================================
 
-def calculate_hourly_bias(weather_data, models, all_features, target_date):
-    """Geçmiş performansa bakarak saatlik bias hesapla"""
+def calculate_hourly_bias(weather_data, models, all_features, target_date, scaler):
+    """
+    Geçmiş performansa bakarak saatlik bias hesapla
+
+    ÖNEMLİ: Bias hesaplaması UNSCALED değerlerle yapılmalı!
+    Çünkü bias daha sonra unscaled tahminlere ekleniyor.
+    """
     print("\n🔍 Geçmiş performans analizi...")
 
     try:
@@ -552,24 +557,24 @@ def calculate_hourly_bias(weather_data, models, all_features, target_date):
             # Sekans oluştur
             available_features = [f for f in all_features if f in hour_data.columns]
             X = hour_data[available_features].values
-            y_true = hour_data['Temperature'].values
+            y_true_scaled = hour_data['Temperature'].values  # SCALED değer
 
             min_steps = min(24, len(X) - 1)
             if min_steps < Config.BIAS_MIN_SEQUENCE:
                 continue
 
-            X_seq, y_seq = [], []
+            X_seq, y_seq_scaled = [], []
             for i in range(len(X) - min_steps):
                 X_seq.append(X[i:(i + min_steps)])
-                y_seq.append(y_true[i + min_steps])
+                y_seq_scaled.append(y_true_scaled[i + min_steps])
 
             X_seq = np.array(X_seq)
-            y_seq = np.array(y_seq)
+            y_seq_scaled = np.array(y_seq_scaled)
 
             if len(X_seq) == 0:
                 continue
 
-            # Ensemble tahmin
+            # Ensemble tahmin (SCALED)
             predictions = []
             for model in models:
                 try:
@@ -581,11 +586,38 @@ def calculate_hourly_bias(weather_data, models, all_features, target_date):
             if len(predictions) == 0:
                 continue
 
-            ensemble_pred = np.mean(predictions, axis=0).flatten()
-            bias = np.median(y_seq - ensemble_pred)
+            ensemble_pred_scaled = np.mean(predictions, axis=0).flatten()
+
+            # ✅ ÖNEMLİ: Scaled değerleri UNSCALE et
+            # Temperature, BASIC_FEATURES listesinde 4. sırada (index 4)
+            temp_index = Config.BASIC_FEATURES.index('Temperature')
+
+            # Dummy array oluştur (scaler tüm feature'ları bekliyor)
+            n_samples = len(y_seq_scaled)
+            n_features = len(Config.BASIC_FEATURES)
+
+            # y_true için dummy array
+            y_true_dummy = np.zeros((n_samples, n_features))
+            y_true_dummy[:, temp_index] = y_seq_scaled
+            y_true_unscaled = scaler.inverse_transform(y_true_dummy)[:, temp_index]
+
+            # ensemble_pred için dummy array
+            pred_dummy = np.zeros((n_samples, n_features))
+            pred_dummy[:, temp_index] = ensemble_pred_scaled
+            pred_unscaled = scaler.inverse_transform(pred_dummy)[:, temp_index]
+
+            # Bias hesapla (artık unscaled değerlerle)
+            bias = np.median(y_true_unscaled - pred_unscaled)
             hourly_bias[hour] = bias
 
         print(f"✅ {len(hourly_bias)} saat için bias hesaplandı")
+
+        # Debug: Bias değerlerini göster
+        if len(hourly_bias) > 0:
+            bias_values = list(hourly_bias.values())
+            print(f"   Bias aralığı: {min(bias_values):.2f}°C ile {max(bias_values):.2f}°C")
+            print(f"   Ortalama bias: {np.mean(bias_values):.2f}°C")
+
         return hourly_bias
 
     except Exception as e:
@@ -1009,8 +1041,8 @@ def main():
     # Model eğitimi
     models = train_ensemble_models(X_seq, y_seq)
 
-    # Hourly bias hesapla
-    hourly_bias = calculate_hourly_bias(weather_data, models, available_features, target_date)
+    # Hourly bias hesapla (scaler parametresi eklendi)
+    hourly_bias = calculate_hourly_bias(weather_data, models, available_features, target_date, scaler)
 
     # Tahmin döngüsü
     print("\n🎯 Tahminler yapılıyor...")
